@@ -1,125 +1,251 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="id">
 <head>
-<meta charset="UTF-8">
-<title>Encrypt / Decrypt TXT</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Encrypt / Decrypt TXT (AES-GCM) — Client-side</title>
+
 <style>
-body { font-family: Arial; padding: 20px; }
-.box { margin-bottom: 30px; padding: 15px; border: 1px solid #ccc; }
+  body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:#f6f8fb;color:#0b1220;padding:18px}
+  .card{max-width:820px;margin:18px auto;padding:18px;border-radius:10px;background:#fff;box-shadow:0 6px 22px rgba(10,20,40,0.06)}
+  h1{margin:0 0 6px;font-size:20px}
+  h2{margin-top:20px;font-size:18px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:8px 0}
+  label{font-size:14px;color:#2b3b4a}
+  input[type="file"]{font-size:13px}
+  input[type="text"], textarea{width:100%;padding:8px;border-radius:8px;border:1px solid #ddd;font-family:monospace}
+  button{padding:8px 12px;border-radius:8px;border:0;background:#0b78a3;color:white;cursor:pointer}
+  button.secondary{background:#e6eef6;color:#0b1220}
+  pre{background:#0f1724;color:#dff6ee;padding:10px;border-radius:8px;overflow:auto}
+  small{color:#667}
+  .note{background:#fff7e6;padding:8px;border-radius:6px;border:1px solid #ffe5b4;color:#6a4b00}
+  .half{flex:1;min-width:240px}
 </style>
 </head>
+
 <body>
+<main class="card">
 
-<h2>🔐 ENKRIPSI TXT → FILE TERENKRIPSI</h2>
-<div class="box">
-    <textarea id="plainText" placeholder="Masukkan teks yang ingin dienkripsi" style="width:100%;height:120px;"></textarea><br><br>
-    <input type="text" id="encKey" placeholder="Masukkan password / key" style="width:100%;"><br><br>
-    <button onclick="encryptNow()">Encrypt</button>
-</div>
+  <h1>Encrypt / Decrypt file TXT (client-side)</h1>
+  <p>Enkripsi AES-GCM 256-bit. Hasil berupa file <code>.enc.txt</code> dalam format JSON. Simpan <strong>key Base64</strong> untuk dekripsi.</p>
 
-<h2>🔓 DEKRIPSI FILE TERENKRIPSI</h2>
-<div class="box">
-    <input type="file" id="encFile"><br><br>
-    <input type="text" id="decKey" placeholder="Masukkan password / key" style="width:100%;"><br><br>
-    <button onclick="decryptNow()">Decrypt</button>
-    <p id="decryptedResult"></p>
-</div>
+  <!-- ======================== ENKRIPSI ======================== -->
+  <section>
+    <h2>Encrypt</h2>
+
+    <div class="row">
+      <label class="half">Pilih file TXT
+        <input id="fileToEnc" type="file" accept=".txt,text/plain">
+      </label>
+
+      <div style="min-width:220px">
+        <button id="genKeyBtn">Generate Random Key</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <label class="half">Key (Base64) — simpan untuk dekripsi
+        <input id="keyField" type="text" placeholder="Kosong = generate otomatis">
+      </label>
+
+      <div style="display:flex;align-items:center;gap:8px">
+        <button id="encryptBtn">Encrypt & Download</button>
+        <button id="copyKeyBtn" class="secondary">Copy Key</button>
+      </div>
+    </div>
+
+    <small>Output: <code>nama_file.enc.txt</code></small>
+  </section>
+
+  <hr>
+
+  <!-- ======================== DEKRIPSI ======================== -->
+  <section>
+    <h2>Decrypt</h2>
+
+    <div class="row">
+      <label class="half">Pilih file encrypted (.enc.txt)
+        <input id="fileToDec" type="file" accept=".enc.txt,application/json">
+      </label>
+
+      <label class="half">Key (Base64)
+        <input id="decKeyField" type="text" placeholder="Masukkan key untuk dekripsi">
+      </label>
+    </div>
+
+    <div class="row">
+      <button id="decryptBtn">Decrypt & Download</button>
+      <button id="previewBtn" class="secondary">Preview (tanpa download)</button>
+    </div>
+
+    <div id="previewArea" style="margin-top:12px;display:none">
+      <strong>Preview isi file:</strong>
+      <pre id="previewText"></pre>
+    </div>
+  </section>
+
+  <hr>
+
+  <section>
+    <h3>Catatan</h3>
+    <p class="note">
+      Jangan simpan KEY di GitHub publik. File terenkripsi aman, tapi key harus disimpan pribadi.
+    </p>
+  </section>
+
+</main>
 
 <script>
-// Convert Base64 <-> Uint8Array
-function b64ToBytes(b64) {
-    const bin = atob(b64);
-    const arr = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-    return arr;
+/* ====================== Utility Base64 ====================== */
+function abToBase64(buf){
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  for(let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
 }
-function bytesToB64(bytes) {
-    let bin = "";
-    bytes.forEach(b => bin += String.fromCharCode(b));
-    return btoa(bin);
-}
-
-// ====================== ENCRYPT ======================
-async function encryptNow() {
-    const text = document.getElementById("plainText").value;
-    const password = document.getElementById("encKey").value;
-
-    if (!text || !password) {
-        alert("Teks dan key wajib diisi.");
-        return;
-    }
-
-    const enc = new TextEncoder().encode(text);
-    const pw = new TextEncoder().encode(password);
-
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-
-    const baseKey = await crypto.subtle.importKey("raw", pw, "PBKDF2", false, ["deriveKey"]);
-    const key = await crypto.subtle.deriveKey(
-        { name: "PBKDF2", salt, iterations: 200000, hash: "SHA-256" },
-        baseKey,
-        { name: "AES-GCM", length: 256 },
-        false,
-        ["encrypt"]
-    );
-
-    const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, enc));
-
-    const output = {
-        salt: bytesToB64(salt),
-        iv: bytesToB64(iv),
-        data: bytesToB64(cipher)
-    };
-
-    const blob = new Blob([JSON.stringify(output)], { type: "text/plain" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = "encrypted.txt";
-    a.click();
+function base64ToAb(b64){
+  const bin = atob(b64);
+  const len = bin.length;
+  const bytes = new Uint8Array(len);
+  for(let i=0;i<len;i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
 }
 
-// ====================== DECRYPT ======================
-async function decryptNow() {
-    const fileInput = document.getElementById("encFile").files[0];
-    const password = document.getElementById("decKey").value;
-
-    if (!fileInput || !password) {
-        alert("File dan key wajib diisi.");
-        return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = async function () {
-        try {
-            const obj = JSON.parse(reader.result);
-
-            const salt = b64ToBytes(obj.salt);
-            const iv = b64ToBytes(obj.iv);
-            const cipher = b64ToBytes(obj.data);
-
-            const pw = new TextEncoder().encode(password);
-            const baseKey = await crypto.subtle.importKey("raw", pw, "PBKDF2", false, ["deriveKey"]);
-
-            const key = await crypto.subtle.deriveKey(
-                { name: "PBKDF2", salt, iterations: 200000, hash: "SHA-256" },
-                baseKey,
-                { name: "AES-GCM", length: 256 },
-                false,
-                ["decrypt"]
-            );
-
-            const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, cipher);
-            const text = new TextDecoder().decode(plain);
-
-            document.getElementById("decryptedResult").innerText = "Hasil dekripsi:\n" + text;
-        } catch (e) {
-            alert("Gagal mendekripsi. Password salah atau file rusak.");
-        }
-    };
-
-    reader.readAsText(fileInput);
+/* ==================== Crypto Helpers ==================== */
+async function generateAesKey(){
+  const key = await crypto.subtle.generateKey(
+    {name:"AES-GCM", length:256},
+    true,
+    ["encrypt","decrypt"]
+  );
+  const raw = await crypto.subtle.exportKey("raw", key);
+  return {key, raw};
 }
+
+async function importKey(b64){
+  return crypto.subtle.importKey(
+    "raw",
+    base64ToAb(b64),
+    "AES-GCM",
+    true,
+    ["encrypt","decrypt"]
+  );
+}
+
+/* ====================== DOM ====================== */
+const fileToEnc = document.getElementById("fileToEnc");
+const genKeyBtn = document.getElementById("genKeyBtn");
+const keyField = document.getElementById("keyField");
+const encryptBtn = document.getElementById("encryptBtn");
+const copyKeyBtn = document.getElementById("copyKeyBtn");
+
+const fileToDec = document.getElementById("fileToDec");
+const decKeyField = document.getElementById("decKeyField");
+const decryptBtn = document.getElementById("decryptBtn");
+const previewBtn = document.getElementById("previewBtn");
+const previewArea = document.getElementById("previewArea");
+const previewText = document.getElementById("previewText");
+
+/* ====================== Generate Key ====================== */
+genKeyBtn.addEventListener("click", async () => {
+  const {raw} = await generateAesKey();
+  const b64 = abToBase64(raw);
+  keyField.value = b64;
+  alert("Key berhasil dibuat! Simpan Base64 key untuk dekripsi.");
+});
+
+/* ====================== Copy Key ====================== */
+copyKeyBtn.addEventListener("click", async () => {
+  if(!keyField.value.trim()) return alert("Belum ada key.");
+  await navigator.clipboard.writeText(keyField.value.trim());
+  alert("Key disalin ke clipboard.");
+});
+
+/* ====================== Encrypt ====================== */
+encryptBtn.addEventListener("click", async () => {
+  const file = fileToEnc.files[0];
+  if(!file) return alert("Pilih file TXT dulu.");
+
+  let keyB64 = keyField.value.trim();
+  let cryptoKey;
+
+  if(!keyB64){
+    const {key, raw} = await generateAesKey();
+    cryptoKey = key;
+    keyB64 = abToBase64(raw);
+    keyField.value = keyB64;
+  } else {
+    cryptoKey = await importKey(keyB64);
+  }
+
+  const plain = await file.arrayBuffer();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const cipher = await crypto.subtle.encrypt({name:"AES-GCM", iv}, cryptoKey, plain);
+
+  const out = {
+    filename: file.name,
+    iv: abToBase64(iv),
+    ciphertext: abToBase64(cipher)
+  };
+
+  const blob = new Blob([JSON.stringify(out)], {type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = file.name.replace(/\.txt$/i,"") + ".enc.txt";
+  a.click();
+});
+
+/* ====================== Decrypt (Download) ====================== */
+decryptBtn.addEventListener("click", async () => {
+  const file = fileToDec.files[0];
+  if(!file) return alert("Pilih file .enc.txt dulu.");
+
+  const keyB64 = decKeyField.value.trim();
+  if(!keyB64) return alert("Masukkan key Base64 untuk dekripsi.");
+
+  const cryptoKey = await importKey(keyB64);
+  const content = JSON.parse(await file.text());
+
+  const iv = new Uint8Array(base64ToAb(content.iv));
+  const cipher = new Uint8Array(base64ToAb(content.ciphertext));
+
+  let plain;
+  try{
+    plain = await crypto.subtle.decrypt({name:"AES-GCM", iv}, cryptoKey, cipher);
+  } catch(e){
+    return alert("Key salah atau file rusak.");
+  }
+
+  const blob = new Blob([plain], {type:"text/plain"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = content.filename.replace(/\.txt$/i,"") + ".dec.txt";
+  a.click();
+});
+
+/* ====================== Preview ====================== */
+previewBtn.addEventListener("click", async () => {
+  const file = fileToDec.files[0];
+  if(!file) return alert("Pilih file .enc.txt.");
+
+  const keyB64 = decKeyField.value.trim();
+  if(!keyB64) return alert("Masukkan key Base64.");
+
+  const cryptoKey = await importKey(keyB64);
+  const content = JSON.parse(await file.text());
+
+  const iv = new Uint8Array(base64ToAb(content.iv));
+  const cipher = new Uint8Array(base64ToAb(content.ciphertext));
+
+  try{
+    const plain = await crypto.subtle.decrypt({name:"AES-GCM", iv}, cryptoKey, cipher);
+    previewText.textContent = new TextDecoder().decode(plain);
+    previewArea.style.display = "block";
+  } catch(e){
+    return alert("Key salah atau data rusak.");
+  }
+});
 </script>
+
 </body>
 </html>
