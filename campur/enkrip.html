@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Encrypt / Decrypt TXT (AES-GCM) — Client-side</title>
+<style>
+  body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial; background:#f6f8fb;color:#0b1220;padding:18px}
+  .card{max-width:820px;margin:18px auto;padding:18px;border-radius:10px;background:#fff;box-shadow:0 6px 22px rgba(10,20,40,0.06)}
+  h1{margin:0 0 6px;font-size:20px}
+  p{margin:6px 0;color:#445}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:8px 0}
+  label{font-size:14px;color:#2b3b4a}
+  input[type="file"]{font-size:13px}
+  input[type="text"], textarea{width:100%;padding:8px;border-radius:8px;border:1px solid #ddd;font-family:monospace}
+  .controls{display:flex;gap:8px;margin-top:8px}
+  button{padding:8px 12px;border-radius:8px;border:0;background:#0b78a3;color:white;cursor:pointer}
+  button.secondary{background:#e6eef6;color:#0b1220}
+  pre{background:#0f1724;color:#dff6ee;padding:10px;border-radius:8px;overflow:auto}
+  small{color:#667}
+  .note{background:#fff7e6;padding:8px;border-radius:6px;border:1px solid #ffe5b4;color:#6a4b00}
+  .half{flex:1;min-width:240px}
+</style>
+</head>
+<body>
+  <main class="card">
+    <h1>Encrypt / Decrypt file TXT (client-side)</h1>
+    <p>Enkripsi AES-GCM 256-bit. Hasil enkripsi berupa file <code>.enc.txt</code> (JSON). Simpan <strong>key (Base64)</strong> untuk dekripsi.</p>
+
+    <section aria-labelledby="encTitle">
+      <h2 id="encTitle">Encrypt</h2>
+      <div class="row">
+        <label class="half">Pilih file .txt untuk dienkripsi
+          <input id="fileToEnc" type="file" accept=".txt,text/plain" />
+        </label>
+
+        <div style="min-width:220px">
+          <button id="genKeyBtn">Generate Random Key</button>
+        </div>
+      </div>
+
+      <div class="row">
+        <label class="half">Key (Base64) — simpan ini untuk dekripsi
+          <input id="keyField" type="text" placeholder="Kosong = gunakan key yang digenerate" />
+        </label>
+
+        <div style="display:flex;align-items:center;gap:8px">
+          <button id="encryptBtn" class="">Encrypt & Download</button>
+          <button id="copyKeyBtn" class="secondary">Copy Key</button>
+        </div>
+      </div>
+
+      <div style="margin-top:10px">
+        <small>Output: file <code>nama_file.enc.txt</code> (format JSON: <code>{iv:"...", ciphertext:"..."}</code>)</small>
+      </div>
+    </section>
+
+    <hr/>
+
+    <section aria-labelledby="decTitle">
+      <h2 id="decTitle">Decrypt</h2>
+
+      <div class="row">
+        <label class="half">Pilih file .enc.txt (hasil enkripsi)
+          <input id="fileToDec" type="file" accept=".enc.txt,application/json" />
+        </label>
+
+        <label class="half">Masukkan Key (Base64) untuk mendekripsi
+          <input id="decKeyField" type="text" placeholder="Masukkan key base64 di sini" />
+        </label>
+      </div>
+
+      <div class="controls">
+        <button id="decryptBtn">Decrypt & Download</button>
+        <button id="previewBtn" class="secondary">Preview (tampilkan isi tanpa download)</button>
+      </div>
+
+      <div id="previewArea" style="margin-top:12px;display:none">
+        <strong>Preview isi file:</strong>
+        <pre id="previewText"></pre>
+      </div>
+    </section>
+
+    <hr/>
+
+    <section>
+      <h3>Penjelasan singkat</h3>
+      <p class="note">
+        <strong>Penting:</strong> <br/>
+        - <em>Jangan</em> menyimpan key di repo publik. Key harus disimpan aman (offline / password manager). <br/>
+        - File terenkripsi aman disimpan di GitHub publik asal key tidak ikut di-push.
+      </p>
+    </section>
+  </main>
+
+<script>
+/* Utility base64 <-> ArrayBuffer */
+function abToBase64(buf){
+  const bytes = new Uint8Array(buf);
+  let binary = '';
+  const chunk = 0x8000;
+  for(let i=0; i<bytes.length; i+=chunk){
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i+chunk));
+  }
+  return btoa(binary);
+}
+function base64ToAb(b64){
+  const binary = atob(b64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for(let i=0;i<len;i++) bytes[i]=binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+/* Crypto helpers */
+async function generateAesKey(){
+  const key = await crypto.subtle.generateKey({name:'AES-GCM', length:256}, true, ['encrypt','decrypt']);
+  const raw = await crypto.subtle.exportKey('raw', key);
+  return {key, raw}; // raw = ArrayBuffer
+}
+async function importKeyFromRawBase64(b64){
+  const raw = base64ToAb(b64);
+  return crypto.subtle.importKey('raw', raw, 'AES-GCM', true, ['encrypt','decrypt']);
+}
+
+/* DOM */
+const fileToEnc = document.getElementById('fileToEnc');
+const genKeyBtn = document.getElementById('genKeyBtn');
+const keyField = document.getElementById('keyField');
+const encryptBtn = document.getElementById('encryptBtn');
+const copyKeyBtn = document.getElementById('copyKeyBtn');
+
+const fileToDec = document.getElementById('fileToDec');
+const decKeyField = document.getElementById('decKeyField');
+const decryptBtn = document.getElementById('decryptBtn');
+const previewBtn = document.getElementById('previewBtn');
+const previewArea = document.getElementById('previewArea');
+const previewText = document.getElementById('previewText');
+
+let lastGeneratedKeyBase64 = null;
+
+/* Generate key and fill field */
+genKeyBtn.addEventListener('click', async () => {
+  try{
+    const {raw} = await generateAesKey();
+    const b64 = abToBase64(raw);
+    keyField.value = b64;
+    lastGeneratedKeyBase64 = b64;
+    alert('Key generated. Simpan key Base64 di tempat aman.');
+  }catch(err){
+    alert('Gagal generate key: ' + err.message);
+  }
+});
+
+/* Copy key */
+copyKeyBtn.addEventListener('click', async () => {
+  const v = keyField.value.trim();
+  if(!v) return alert('Belum ada key di field.');
+  try{
+    await navigator.clipboard.writeText(v);
+    alert('Key disalin ke clipboard.');
+  }catch(e){
+    alert('Copy gagal: ' + e.message);
+  }
+});
+
+/* Encrypt & download */
+encryptBtn.addEventListener('click', async () => {
+  const file = fileToEnc.files[0];
+  if(!file) return alert('Pilih file .txt untuk dienkripsi.');
+  // key: either from input or generate new
+  let keyBase64 = keyField.value.trim();
+  let cryptoKey;
+  if(!keyBase64){
+    // generate one and fill
+    const {key, raw} = await generateAesKey();
+    keyBase64 = abToBase64(raw);
+    keyField.value = keyBase64;
+    lastGeneratedKeyBase64 = keyBase64;
+    cryptoKey = key;
+  } else {
+    // import given base64 key
+    try{
+      cryptoKey = await importKeyFromRawBase64(keyBase64);
+    }catch(e){
+      return alert('Key tidak valid (format Base64).');
+    }
+  }
+
+  try{
+    const arrayBuffer = await file.arrayBuffer();
+    const iv = crypto.getRandomValues(new Uint8Array(12)); // 96-bit IV recommended for AES-GCM
+    const cipherBuffer = await crypto.subtle.encrypt({name:'AES-GCM', iv: iv}, cryptoKey, arrayBuffer);
+    // prepare JSON container
+    const outObj = {
+      filename: file.name,
+      iv: abToBase64(iv.buffer),
+      ciphertext: abToBase64(cipherBuffer),
+      alg: 'AES-GCM',
+      tagLength: 128
+    };
+    const json = JSON.stringify(outObj);
+    const blob = new Blob([json], {type:'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const outName = file.name.replace(/\.txt$/i, '') + '.enc.txt';
+    a.download = outName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    alert('File terenkripsi siap di-download. Simpan KEY Base64 untuk dekripsi.');
+  }catch(err){
+    alert('Gagal enkripsi: ' + err.message);
+  }
+});
+
+/* Decrypt & download */
+decryptBtn.addEventListener('click', async () => {
+  const file = fileToDec.files[0];
+  if(!file) return alert('Pilih file .enc.txt (hasil enkripsi).');
+  const keyB64 = decKeyField.value.trim();
+  if(!keyB64) return alert('Masukkan key Base64 untuk dekripsi.');
+  let cryptoKey;
+  try{
+    cryptoKey = await importKeyFromRawBase64(keyB64);
+  }catch(e){
+    return alert('Key tidak valid (format Base64).');
+  }
+
+  try{
+    const text = await file.text();
+    const obj = JSON.parse(text);
+    if(!obj.iv || !obj.ciphertext) throw new Error('File enc tidak valid (missing fields).');
+    const iv = base64ToAb(obj.iv);
+    const cipher = base64ToAb(obj.ciphertext);
+    const plainBuffer = await crypto.subtle.decrypt({name:'AES-GCM', iv: new Uint8Array(iv)}, cryptoKey, cipher);
+    const blob = new Blob([plainBuffer], {type: 'text/plain;charset=utf-8'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    const outName = (obj.filename ? obj.filename.replace(/\.txt$/i,'') + '.dec.txt' : 'decrypted.txt');
+    a.download = outName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    alert('File berhasil didekripsi dan di-download.');
+  }catch(err){
+    alert('Gagal dekripsi: ' + err.message);
+  }
+});
+
+/* Preview decrypted content without download */
+previewBtn.addEventListener('click', async () => {
+  previewArea.style.display = 'none';
+  previewText.textContent = '';
+  const file = fileToDec.files[0];
+  if(!file) return alert('Pilih file .enc.txt untuk preview.');
+  const keyB64 = decKeyField.value.trim();
+  if(!keyB64) return alert('Masukkan key Base64 untuk dekripsi.');
+  let cryptoKey;
+  try{ cryptoKey = await importKeyFromRawBase64(keyB64); }catch(e){ return alert('Key tidak valid (format Base64).'); }
+
+  try{
+    const text = await file.text();
+    const obj = JSON.parse(text);
+    const iv = base64ToAb(obj.iv);
+    const cipher = base64ToAb(obj.ciphertext);
+    const plainBuffer = await crypto.subtle.decrypt({name:'AES-GCM', iv: new Uint8Array(iv)}, cryptoKey, cipher);
+    const plainText = new TextDecoder().decode(plainBuffer);
+    previewText.textContent = plainText;
+    previewArea.style.display = 'block';
+  }catch(err){
+    alert('Gagal decrypt/preview: ' + err.message);
+  }
+});
+</script>
+</body>
+</html>
