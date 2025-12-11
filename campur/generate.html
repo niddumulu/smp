@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Random Private Key Generator (~50 chars)</title>
+  <style>
+    :root{
+      --bg:#0f1724; --card:#0b1220; --muted:#98a0b3; --accent:#6ee7b7;
+      --glass: rgba(255,255,255,0.03);
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    html,body{height:100%;margin:0;background:linear-gradient(180deg,#071029 0%, #0b1220 100%); color:#e6eef6;}
+    .wrap{max-width:760px;margin:40px auto;padding:26px;background:var(--card);border-radius:12px;box-shadow:0 8px 30px rgba(2,6,23,0.6);}
+    h1{margin:0 0 6px;font-size:20px}
+    p.lead{margin:0 0 18px;color:var(--muted);font-size:13px}
+    .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    label{font-size:13px;color:var(--muted);display:flex;gap:8px;align-items:center}
+    input[type="number"]{width:88px;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:var(--glass);color:inherit}
+    .btn{padding:10px 14px;border-radius:10px;border:none;background:linear-gradient(90deg,#154a44,#0f6f5f);color:#042018;cursor:pointer;font-weight:600}
+    .btn.secondary{background:transparent;color:var(--accent);border:1px solid rgba(110,231,183,0.12)}
+    .result{
+      margin-top:16px;padding:14px;border-radius:10px;background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace; word-break:break-all;
+      display:flex;align-items:center;justify-content:space-between;gap:12px;
+    }
+    .key-text{flex:1;padding-right:10px;font-size:15px;color:#d6f7e9}
+    .controls{display:flex;gap:8px}
+    .small{font-size:12px;color:var(--muted)}
+    footer{margin-top:18px;color:var(--muted);font-size:12px}
+    .copy-notice{font-size:12px;color:var(--accent);display:none}
+    @media(max-width:560px){.row{flex-direction:column;align-items:stretch}.controls{justify-content:flex-end}}
+  </style>
+</head>
+<body>
+  <main class="wrap" role="main">
+    <h1>Random Private Key Generator</h1>
+    <p class="lead">Generate private-key-like random strings ~50 karakter. Built with Web Crypto API (cryptographically secure). Pilih panjang dan jenis karakter lalu klik <strong>Generate</strong>.</p>
+
+    <div class="row" style="margin-bottom:12px;">
+      <label>
+        Panjang
+        <input id="length" type="number" min="16" max="256" value="50" aria-label="Panjang key (jumlah karakter)" />
+      </label>
+
+      <label title="Gunakan huruf besar + kecil + angka">
+        <input id="useAlnum" type="checkbox" checked />
+        Huruf + Angka
+      </label>
+
+      <label title="Tambahkan simbol seperti !@#">
+        <input id="useSymbols" type="checkbox" />
+        Simbol
+      </label>
+
+      <label title="Hapus karakter yang mudah bingung (O,0,I,l)">
+        <input id="avoidAmbiguous" type="checkbox" />
+        Hindari karakter ambigu
+      </label>
+
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button id="generateBtn" class="btn" aria-label="Generate random key">Generate</button>
+        <button id="randomPreset" class="btn secondary" title="Isi dengan panjang acak 48-64">Random ~50</button>
+      </div>
+    </div>
+
+    <div class="result" aria-live="polite">
+      <div id="key" class="key-text" aria-label="Hasil private key">— belum ada hasil —</div>
+      <div class="controls">
+        <button id="toggleMask" class="btn secondary" title="Sembunyikan / Tampilkan">Sembunyikan</button>
+        <button id="copyBtn" class="btn" title="Salin ke clipboard">Salin</button>
+        <button id="downloadBtn" class="btn secondary" title="Unduh sebagai file .txt">Unduh</button>
+      </div>
+    </div>
+
+    <div style="margin-top:12px" class="small">
+      <strong>Catatan:</strong> Generator ini menggunakan <code>window.crypto.getRandomValues</code> — cocok untuk menghasilkan string acak. Namun untuk kunci kriptografi nyata (wallet/private key untuk crypto) gunakan alat/wallet berlisensi khusus dan praktik keamanan yang ketat (cold storage, audit, dst).
+    </div>
+
+    <footer>
+      <span class="copy-notice" id="copyNotice">Tersalin ke clipboard ✓</span>
+    </footer>
+  </main>
+
+<script>
+/*
+  Secure random string generator.
+  - Uses crypto.getRandomValues
+  - Maps random bytes to an allowed charset without bias using rejection sampling
+*/
+
+(function(){
+  const el = id => document.getElementById(id);
+  const lengthInput = el('length');
+  const useAlnum = el('useAlnum');
+  const useSymbols = el('useSymbols');
+  const avoidAmbiguous = el('avoidAmbiguous');
+  const generateBtn = el('generateBtn');
+  const randomPreset = el('randomPreset');
+  const keyEl = el('key');
+  const copyBtn = el('copyBtn');
+  const downloadBtn = el('downloadBtn');
+  const toggleMask = el('toggleMask');
+  const copyNotice = el('copyNotice');
+
+  // Character sets
+  const LOWER = 'abcdefghijklmnopqrstuvwxyz';
+  const UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const DIGITS = '0123456789';
+  const SYMBOLS = '!@#$%^&*()-_=+[]{};:,.<>?/|~';
+  const AMBIGUOUS = 'O0lI1';
+
+  function buildCharset(opts){
+    let set = '';
+    if(opts.alnum){
+      set += LOWER + UPPER + DIGITS;
+    } else {
+      // if alnum not chosen, default to lowercase+digits for usability
+      set += LOWER + DIGITS;
+    }
+    if(opts.symbols) set += SYMBOLS;
+    if(opts.avoidAmbiguous){
+      const re = new RegExp('[' + escapeRegExp(AMBIGUOUS) + ']', 'g');
+      set = set.replace(re, '');
+    }
+    // Deduplicate just in case
+    set = Array.from(new Set(set.split(''))).join('');
+    if(!set) set = LOWER + DIGITS;
+    return set;
+  }
+
+  function escapeRegExp(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+  // Rejection sampling to avoid bias
+  function secureRandomString(length, charset){
+    if(length <= 0) return '';
+    const out = [];
+    const chars = charset;
+    const charLen = chars.length;
+    // compute max valid value to avoid modulo bias
+    const maxValid = Math.floor(256 / charLen) * charLen - 1;
+    const buf = new Uint8Array(1024);
+    let i = 0;
+    while(out.length < length){
+      // refill buffer if needed
+      if(i >= buf.length){
+        window.crypto.getRandomValues(buf);
+        i = 0;
+      } else if(i === 0){
+        window.crypto.getRandomValues(buf);
+      }
+      const val = buf[i++];
+      if(val > maxValid) continue;
+      out.push(chars[val % charLen]);
+    }
+    return out.join('');
+  }
+
+  function setKeyText(text){
+    keyEl.textContent = text;
+    keyEl.setAttribute('data-raw', text);
+    // mask by default to "••••" like display when user toggled hidden
+    if(toggleMask.dataset.hidden === 'true'){
+      keyEl.textContent = '•'.repeat(Math.min(6, text.length)) + ' ' + text.slice(-8);
+    }
+  }
+
+  generateBtn.addEventListener('click', () => {
+    const len = parseInt(lengthInput.value, 10) || 50;
+    const opts = {
+      alnum: useAlnum.checked,
+      symbols: useSymbols.checked,
+      avoidAmbiguous: avoidAmbiguous.checked
+    };
+    const charset = buildCharset(opts);
+    const key = secureRandomString(Math.max(4, Math.min(1024, len)), charset);
+    // set raw and masked display according to toggle
+    if(toggleMask.dataset.hidden === 'true'){
+      keyEl.textContent = '•'.repeat(Math.min(6, key.length)) + ' ' + key.slice(-8);
+      keyEl.setAttribute('data-raw', key);
+    } else {
+      keyEl.textContent = key;
+      keyEl.setAttribute('data-raw', key);
+    }
+    hideCopyNotice();
+  });
+
+  randomPreset.addEventListener('click', () => {
+    // random length around ~50 (48-64)
+    const len = Math.floor(Math.random() * (64 - 48 + 1)) + 48;
+    lengthInput.value = len;
+    generateBtn.click();
+  });
+
+  copyBtn.addEventListener('click', async () => {
+    const raw = keyEl.getAttribute('data-raw') || '';
+    if(!raw){
+      flashNotice('Tidak ada key untuk disalin', true);
+      return;
+    }
+    try{
+      await navigator.clipboard.writeText(raw);
+      showCopyNotice();
+    }catch(e){
+      // fallback: select and execCommand
+      const ta = document.createElement('textarea');
+      ta.value = raw;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try{
+        document.execCommand('copy');
+        showCopyNotice();
+      }catch(err){
+        flashNotice('Copy gagal — periksa izin clipboard', true);
+      } finally {
+        document.body.removeChild(ta);
+      }
+    }
+  });
+
+  downloadBtn.addEventListener('click', () => {
+    const raw = keyEl.getAttribute('data-raw') || '';
+    if(!raw){
+      flashNotice('Tidak ada key untuk diunduh', true);
+      return;
+    }
+    const blob = new Blob([raw], {type:'text/plain;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'private-key.txt';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    flashNotice('File diunduh', false);
+  });
+
+  toggleMask.addEventListener('click', () => {
+    const hidden = toggleMask.dataset.hidden === 'true';
+    toggleMask.dataset.hidden = hidden ? 'false' : 'true';
+    toggleMask.textContent = hidden ? 'Sembunyikan' : 'Tampilkan';
+    // apply to displayed key
+    const raw = keyEl.getAttribute('data-raw') || '';
+    if(!raw) return;
+    if(toggleMask.dataset.hidden === 'true'){
+      keyEl.textContent = '•'.repeat(Math.min(6, raw.length)) + ' ' + raw.slice(-8);
+    } else {
+      keyEl.textContent = raw;
+    }
+  });
+
+  function showCopyNotice(){
+    copyNotice.style.display = 'inline';
+    copyNotice.textContent = 'Tersalin ke clipboard ✓';
+    setTimeout(()=> copyNotice.style.display = 'none', 2400);
+  }
+  function hideCopyNotice(){ copyNotice.style.display = 'none'; }
+  function flashNotice(text, isError){
+    copyNotice.style.display = 'inline';
+    copyNotice.style.color = isError ? '#ffb4b4' : '';
+    copyNotice.textContent = text;
+    setTimeout(()=>{ copyNotice.style.display = 'none'; copyNotice.style.color = ''; }, 2400);
+  }
+
+  // initial state
+  toggleMask.dataset.hidden = 'true';
+  toggleMask.textContent = 'Tampilkan';
+  lengthInput.setAttribute('aria-valuemin', 16);
+  lengthInput.setAttribute('aria-valuemax', 256);
+
+  // generate once on load
+  window.addEventListener('load', () => generateBtn.click());
+})();
+</script>
+</body>
+</html>
